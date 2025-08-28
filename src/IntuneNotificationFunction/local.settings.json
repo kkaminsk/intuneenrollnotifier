@@ -1,0 +1,16 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "APPINSIGHTS_INSTRUMENTATIONKEY": "",
+    "APPLICATIONINSIGHTS_CONNECTION_STRING": "",
+    "KeyVaultUrl": "https://your-keyvault.vault.azure.net/",
+    "NotificationEmails": "admin@company.com;it-team@company.com",
+    "GRAPH_API_CLIENT_ID": "",
+    "GRAPH_API_TENANT_ID": "",
+    "SENDGRID_API_KEY": "",
+    "NOTIFICATION_EMAIL_FROM": "noreply@company.com",
+    "LOG_LEVEL": "Information"
+  }
+}
