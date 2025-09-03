@@ -19,12 +19,13 @@ param sendGridApiKey string
 
 // Variables
 var resourcePrefix = 'intune-notify-${environment}'
-var storageAccountName = 'intunestorage${uniqueSuffix}'
-var keyVaultName = '${resourcePrefix}-kv-${uniqueSuffix}'
+var storageAccountName = 'intunestg${uniqueSuffix}'
+var keyVaultName = 'in-kv-${environment}-${uniqueSuffix}'
 var logicAppName = '${resourcePrefix}-logic'
 var functionAppName = '${resourcePrefix}-func'
 var appInsightsName = '${resourcePrefix}-insights'
 var appServicePlanName = '${resourcePrefix}-plan'
+var logicAppServicePlanName = '${resourcePrefix}-logic-plan'
 
 // Storage Account
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
@@ -99,6 +100,16 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
   }
 }
 
+// App Service Plan for Logic App
+resource logicAppServicePlan 'Microsoft.Web/serverfarms@2023-01-01' = {
+  name: logicAppServicePlanName
+  location: location
+  sku: {
+    name: 'WS1'
+    tier: 'WorkflowStandard'
+  }
+}
+
 // Function App
 resource functionApp 'Microsoft.Web/sites@2023-01-01' = {
   name: functionAppName
@@ -165,7 +176,7 @@ resource logicApp 'Microsoft.Web/sites@2023-01-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    serverFarmId: appServicePlan.id
+    serverFarmId: logicAppServicePlan.id
     httpsOnly: true
     siteConfig: {
       appSettings: [
@@ -221,47 +232,26 @@ resource logicApp 'Microsoft.Web/sites@2023-01-01' = {
   }
 }
 
-// Key Vault access policy for Function App
-resource keyVaultAccessPolicyFunction 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
-  parent: keyVault
-  name: 'add'
+// Grant Function App access to Key Vault
+resource functionAppRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: keyVault
+  name: guid(keyVault.id, functionApp.id, '4633458b-17de-408a-b874-0445c86b69e6')
   properties: {
-    accessPolicies: [
-      {
-        tenantId: tenant().tenantId
-        objectId: functionApp.identity.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
-          ]
-        }
-      }
-    ]
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
+    principalId: functionApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
 }
 
-// Key Vault access policy for Logic App
-resource keyVaultAccessPolicyLogic 'Microsoft.KeyVault/vaults/accessPolicies@2023-07-01' = {
-  parent: keyVault
-  name: 'add'
+// Grant Logic App access to Key Vault
+resource logicAppRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: keyVault
+  name: guid(keyVault.id, logicApp.id, '4633458b-17de-408a-b874-0445c86b69e6')
   properties: {
-    accessPolicies: [
-      {
-        tenantId: tenant().tenantId
-        objectId: logicApp.identity.principalId
-        permissions: {
-          secrets: [
-            'get'
-            'list'
-          ]
-        }
-      }
-    ]
+    roleDefinitionId: resourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6') // Key Vault Secrets User
+    principalId: logicApp.identity.principalId
+    principalType: 'ServicePrincipal'
   }
-  dependsOn: [
-    keyVaultAccessPolicyFunction
-  ]
 }
 
 // Outputs

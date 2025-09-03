@@ -3,6 +3,7 @@ using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
@@ -18,19 +19,25 @@ namespace IntuneNotificationFunction
     {
         private readonly GraphService _graphService;
         private readonly EmailService _emailService;
+        private readonly TeamsNotificationService _teamsService;
         private readonly TelemetryClient _telemetryClient;
         private readonly ILogger<ProcessEnrollmentEvent> _logger;
+        private readonly IConfiguration _configuration;
 
         public ProcessEnrollmentEvent(
             GraphService graphService,
             EmailService emailService,
+            TeamsNotificationService teamsService,
             TelemetryClient telemetryClient,
-            ILogger<ProcessEnrollmentEvent> logger)
+            ILogger<ProcessEnrollmentEvent> logger,
+            IConfiguration configuration)
         {
             _graphService = graphService;
             _emailService = emailService;
+            _teamsService = teamsService;
             _telemetryClient = telemetryClient;
             _logger = logger;
+            _configuration = configuration;
         }
 
         [FunctionName("ProcessEnrollmentEvent")]
@@ -88,13 +95,13 @@ namespace IntuneNotificationFunction
                 }
 
                 // Send notification
-                var notificationSent = await _emailService.SendEnrollmentNotificationAsync(processedEvent);
+                var notificationSent = await SendNotificationAsync(processedEvent);
                 
                 if (!notificationSent)
                 {
-                    _logger.LogWarning("Failed to send email notification for device {DeviceName}", processedEvent.DeviceName);
+                    _logger.LogWarning("Failed to send notification for device {DeviceName}", processedEvent.DeviceName);
                     result.Success = false;
-                    result.ErrorMessage = "Failed to send email notification";
+                    result.ErrorMessage = "Failed to send notification";
                     return result;
                 }
 
@@ -162,7 +169,7 @@ namespace IntuneNotificationFunction
                         var processedEvent = await ProcessEnrollmentEventAsync(device);
                         if (processedEvent != null)
                         {
-                            await _emailService.SendEnrollmentNotificationAsync(processedEvent);
+                            await SendNotificationAsync(processedEvent);
                             log.LogInformation("Processed and notified for device {DeviceName}", device.DeviceName);
                         }
                     }
@@ -204,7 +211,7 @@ namespace IntuneNotificationFunction
                     Services = new
                     {
                         GraphService = await TestGraphServiceAsync(),
-                        EmailService = "Available" // Could add email service test
+                        NotificationService = await TestNotificationServiceAsync()
                     }
                 };
 
@@ -331,6 +338,59 @@ namespace IntuneNotificationFunction
             catch
             {
                 return "Error";
+            }
+        }
+
+        private async Task<string> TestNotificationServiceAsync()
+        {
+            try
+            {
+                var notificationType = _configuration["NOTIFICATION_TYPE"] ?? "Email";
+                
+                if (notificationType.Equals("Teams", StringComparison.OrdinalIgnoreCase))
+                {
+                    var isConnected = await _teamsService.TestConnectionAsync();
+                    return isConnected ? "Teams Connected" : "Teams Disconnected";
+                }
+                else
+                {
+                    return "Email Available";
+                }
+            }
+            catch
+            {
+                return "Error";
+            }
+        }
+
+        private async Task<bool> SendNotificationAsync(EnrollmentEvent enrollmentEvent)
+        {
+            try
+            {
+                var notificationType = _configuration["NOTIFICATION_TYPE"] ?? "Email";
+                
+                if (notificationType.Equals("Teams", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Sending Teams notification for device {DeviceName}", enrollmentEvent.DeviceName);
+                    return await _teamsService.SendEnrollmentNotificationAsync(enrollmentEvent);
+                }
+                else if (notificationType.Equals("Both", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("Sending both Teams and Email notifications for device {DeviceName}", enrollmentEvent.DeviceName);
+                    var teamsResult = await _teamsService.SendEnrollmentNotificationAsync(enrollmentEvent);
+                    var emailResult = await _emailService.SendEnrollmentNotificationAsync(enrollmentEvent);
+                    return teamsResult || emailResult; // Success if at least one succeeds
+                }
+                else
+                {
+                    _logger.LogInformation("Sending Email notification for device {DeviceName}", enrollmentEvent.DeviceName);
+                    return await _emailService.SendEnrollmentNotificationAsync(enrollmentEvent);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to send notification for device {DeviceName}", enrollmentEvent.DeviceName);
+                return false;
             }
         }
     }

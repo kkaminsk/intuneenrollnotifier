@@ -11,6 +11,9 @@
     "GRAPH_API_TENANT_ID": "",
     "SENDGRID_API_KEY": "",
     "NOTIFICATION_EMAIL_FROM": "noreply@company.com",
+    "NOTIFICATION_TYPE": "Teams",
+    "TEAMS_TEAM_ID": "",
+    "TEAMS_CHANNEL_ID": "",
     "LOG_LEVEL": "Information"
   }
 }

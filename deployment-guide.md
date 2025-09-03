@@ -10,7 +10,9 @@
 
 ### Required Tools
 - Azure CLI (version 2.40+)
+    https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-windows?view=azure-cli-latest&pivots=msi
 - Azure PowerShell (version 8.0+)
+    Install-Module -Name Az -Repository PSGallery -Force
 - Visual Studio Code with Azure extensions
 - .NET 6 SDK
 - Git
@@ -37,15 +39,39 @@ Write-Host "Client Secret: $($secret.Value)"
 ```
 
 ### Configure API Permissions
-1. Navigate to Azure Portal → Azure Active Directory → App registrations
+1. Navigate to Azure Portal → Azure Active Directory → App registrations → Intune Enrollment Notifier
 2. Select your app → API permissions
 3. Add the following Microsoft Graph permissions:
    - `DeviceManagementManagedDevices.Read.All` (Application)
    - `DeviceManagementConfiguration.Read.All` (Application)
    - `User.Read.All` (Application)
+   - `ChannelMessage.Send` (Application) - **Required for Teams notifications**
+   - `Team.ReadBasic.All` (Application) - **Required for Teams notifications**
+   - `Channel.ReadBasic.All` (Application) - **Required for Teams notifications**
 4. Grant admin consent for all permissions
 
-## Step 2: Deploy Azure Resources
+## Step 2: Configure Notification Method
+
+### Option A: Microsoft Teams (Recommended - Cost Optimized)
+
+#### Get Teams Team and Channel IDs
+1. Open Microsoft Teams
+2. Navigate to your team → Click "..." → "Get link to team"
+3. Extract the `groupId` from the URL (this is your Team ID)
+4. Navigate to your channel → Click "..." → "Get link to channel"
+5. Extract the channel ID from the URL
+
+**See [SETUP_TEAMS.md](SETUP_TEAMS.md) for detailed instructions.**
+
+### Option B: SendGrid Email (Legacy)
+
+#### Create SendGrid Account
+1. Sign up at [SendGrid](https://sendgrid.com/)
+2. Verify your sender identity
+3. Create an API key with Mail Send permissions
+4. Configure domain authentication (recommended)
+
+## Step 3: Deploy Azure Resources
 
 ### Using Azure CLI
 ```bash
@@ -56,14 +82,16 @@ az login
 az account set --subscription "your-subscription-id"
 
 # Create resource group
-az group create --name "rg-intune-notify-prod" --location "East US"
+az group create --name "rg-intunenotify-canada-central" --location "Canada Central"
 
-# Deploy resources using Bicep
+# Deploy resources using Bicep (Teams configuration)
 az deployment group create \
   --resource-group "rg-intune-notify-prod" \
   --template-file "azure-resources.bicep" \
   --parameters environment="prod" \
-               sendGridApiKey="your-sendgrid-api-key" \
+               notificationType="Teams" \
+               teamsTeamId="your-team-id" \
+               teamsChannelId="your-channel-id" \
                notificationEmails='["admin@company.com","it-team@company.com"]'
 ```
 
@@ -78,53 +106,42 @@ Set-AzContext -SubscriptionId "your-subscription-id"
 # Create resource group
 New-AzResourceGroup -Name "rg-intune-notify-prod" -Location "East US"
 
-# Deploy resources
+# Deploy resources (Teams configuration)
 New-AzResourceGroupDeployment `
   -ResourceGroupName "rg-intune-notify-prod" `
   -TemplateFile "azure-resources.bicep" `
   -environment "prod" `
-  -sendGridApiKey "your-sendgrid-api-key" `
+  -notificationType "Teams" `
+  -teamsTeamId "your-team-id" `
+  -teamsChannelId "your-channel-id" `
   -notificationEmails @("admin@company.com", "it-team@company.com")
 ```
 
-## Step 3: Configure SendGrid
+## Step 4: Configure Azure Key Vault Secrets
 
-### Create SendGrid Account
-1. Sign up at [SendGrid](https://sendgrid.com/)
-2. Verify your sender identity
-3. Create an API key with Mail Send permissions
-4. Configure domain authentication (recommended)
+### Store Required Secrets
+```bash
+# Store Graph API credentials
+az keyvault secret set --vault-name "your-keyvault" --name "GRAPH-API-CLIENT-ID" --value "your-client-id"
+az keyvault secret set --vault-name "your-keyvault" --name "GRAPH-API-TENANT-ID" --value "your-tenant-id"
+az keyvault secret set --vault-name "your-keyvault" --name "GRAPH-API-CLIENT-SECRET" --value "your-client-secret"
 
-### Email Template Setup
-Create a dynamic template in SendGrid with the following structure:
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Intune Enrollment Notification</title>
-</head>
-<body>
-    <h2>{{event_type}} - Device Enrollment</h2>
-    <table>
-        <tr><td><strong>Device Name:</strong></td><td>{{device_name}}</td></tr>
-        <tr><td><strong>User:</strong></td><td>{{user_name}}</td></tr>
-        <tr><td><strong>Platform:</strong></td><td>{{platform}}</td></tr>
-        <tr><td><strong>Status:</strong></td><td>{{status}}</td></tr>
-        <tr><td><strong>Timestamp:</strong></td><td>{{timestamp}}</td></tr>
-    </table>
-    {{#if error_details}}
-    <h3>Error Details</h3>
-    <pre>{{error_details}}</pre>
-    {{/if}}
-    {{#if diagnostic_info}}
-    <h3>Diagnostic Information</h3>
-    <pre>{{diagnostic_info}}</pre>
-    {{/if}}
-</body>
-</html>
+# Store SendGrid API key (if using email)
+az keyvault secret set --vault-name "your-keyvault" --name "SendGridApiKey" --value "your-sendgrid-key"
 ```
 
-## Step 4: Deploy Function App Code
+### Grant Function App Access to Key Vault
+```bash
+# Enable system-assigned managed identity
+az functionapp identity assign --name "your-function-app" --resource-group "rg-intune-notify-prod"
+
+# Grant access to Key Vault
+az keyvault set-policy --name "your-keyvault" \
+  --object-id "<function-app-managed-identity-id>" \
+  --secret-permissions get list
+```
+
+## Step 5: Deploy Function App Code
 
 ### Function App Structure
 ```
@@ -133,27 +150,50 @@ IntuneNotificationFunction/
 ├── local.settings.json
 ├── IntuneNotificationFunction.csproj
 ├── ProcessEnrollmentEvent.cs
+├── Startup.cs
 ├── Models/
 │   ├── EnrollmentEvent.cs
 │   └── NotificationData.cs
 └── Services/
     ├── GraphService.cs
-    └── EmailService.cs
+    ├── EmailService.cs
+    └── TeamsNotificationService.cs  # NEW: Teams integration
+```
+
+### Configure Function App Settings
+```bash
+# Set notification type (Teams, Email, or Both)
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings NOTIFICATION_TYPE="Teams"
+
+# Set Teams configuration
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings TEAMS_TEAM_ID="your-team-id" TEAMS_CHANNEL_ID="your-channel-id"
+
+# Set Key Vault URL
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings KeyVaultUrl="https://your-keyvault.vault.azure.net/"
 ```
 
 ### Deploy Function Code
 ```bash
 # Navigate to function app directory
-cd IntuneNotificationFunction
+cd src/IntuneNotificationFunction
 
 # Build and publish
 dotnet publish --configuration Release
 
-# Deploy using Azure CLI
+# Deploy using Azure Functions Core Tools
 func azure functionapp publish intune-notify-prod-func --csharp
 ```
 
-## Step 5: Configure Logic Apps Workflow
+## Step 6: Configure Logic Apps Workflow (Optional)
 
 ### Create Workflow Definition
 1. Navigate to Logic Apps in Azure Portal
@@ -211,7 +251,7 @@ func azure functionapp publish intune-notify-prod-func --csharp
 }
 ```
 
-## Step 6: Configure Microsoft Graph Webhooks (Optional)
+## Step 7: Configure Microsoft Graph Webhooks (Optional)
 
 ### Create Webhook Subscription
 ```csharp
@@ -230,25 +270,60 @@ await graphServiceClient.Subscriptions
     .AddAsync(subscription);
 ```
 
-## Step 7: Testing and Validation
+## Step 8: Testing and Validation
 
 ### Test Checklist
 - [ ] Azure resources deployed successfully
 - [ ] Function App is running and accessible
-- [ ] Logic App workflow executes without errors
+- [ ] Azure AD app permissions granted
+- [ ] Key Vault secrets configured
 - [ ] Microsoft Graph API calls return data
-- [ ] Email notifications are sent successfully
+- [ ] Teams/Email notifications are sent successfully
+- [ ] Health check endpoint returns "Healthy"
 - [ ] Error handling works correctly
 - [ ] Monitoring and logging are functional
+
+### Health Check Test
+```bash
+curl https://your-function-app.azurewebsites.net/api/health
+```
+
+Expected response:
+```json
+{
+  "Status": "Healthy",
+  "Services": {
+    "GraphService": "Connected",
+    "NotificationService": "Teams Connected"
+  }
+}
+```
 
 ### Test Scenarios
 1. **Successful Enrollment**: Enroll a test device and verify notification
 2. **Failed Enrollment**: Simulate enrollment failure and check error details
 3. **Multiple Device Types**: Test with Windows, iOS, Android devices
 4. **High Volume**: Test with multiple simultaneous enrollments
-5. **Error Conditions**: Test API failures, email delivery issues
+5. **Error Conditions**: Test API failures, notification delivery issues
+6. **Teams Notification**: Verify Adaptive Card appears in Teams channel
+7. **Notification Switching**: Test switching between Teams/Email/Both modes
 
-## Step 8: Monitoring and Maintenance
+### Manual Test Notification
+```bash
+curl -X POST https://your-function-app.azurewebsites.net/api/ProcessEnrollmentEvent \
+  -H "Content-Type: application/json" \
+  -H "x-functions-key: YOUR_FUNCTION_KEY" \
+  -d '{
+    "DeviceName": "TEST-DEVICE",
+    "EventType": "Success",
+    "UserDisplayName": "Test User",
+    "UserPrincipalName": "test@company.com",
+    "OperatingSystem": "Windows",
+    "OsVersion": "11"
+  }'
+```
+
+## Step 9: Monitoring and Maintenance
 
 ### Application Insights Configuration
 1. Navigate to Application Insights in Azure Portal
@@ -292,7 +367,15 @@ customEvents
 - Verify Key Vault access
 - Review function logs in Application Insights
 
-#### Email Delivery Problems
+#### Notification Delivery Problems
+
+**Teams Notifications:**
+- Verify Graph API permissions are granted
+- Check Team/Channel IDs are correct
+- Ensure client secret hasn't expired
+- Verify app has access to the team
+
+**Email Notifications:**
 - Validate SendGrid API key
 - Check sender authentication
 - Review email template syntax
@@ -306,6 +389,9 @@ customEvents
 - [Microsoft Graph API Documentation](https://docs.microsoft.com/graph/)
 - [Azure Logic Apps Documentation](https://docs.microsoft.com/azure/logic-apps/)
 - [Azure Functions Documentation](https://docs.microsoft.com/azure/azure-functions/)
+- [Teams Integration Guide](TEAMS_INTEGRATION.md)
+- [Cost Optimization Guide](COST_OPTIMIZATION.md)
+- [Setup Teams Guide](SETUP_TEAMS.md)
 - [SendGrid API Documentation](https://docs.sendgrid.com/api-reference)
 
 ## Security Considerations
@@ -323,3 +409,60 @@ customEvents
 - Implement data retention policies
 - Document data processing activities
 - Regular compliance audits
+
+## Cost Optimization
+
+### Teams vs Email Cost Comparison
+
+**Teams Integration (Recommended):**
+- Teams: $0 (included in M365 licenses)
+- Azure Function: ~$2/month (optimized)
+- Storage: ~$2/month
+- Application Insights: ~$3/month
+- Key Vault: ~$1/month
+- **Total: ~$8/month**
+
+**Email Integration (Legacy):**
+- SendGrid: $0-$100/month (varies by volume)
+- Azure Function: ~$5/month
+- Storage: ~$2/month
+- Application Insights: ~$5/month
+- Key Vault: ~$1/month
+- **Total: ~$13-$113/month**
+
+**Savings with Teams: 76-90% cost reduction**
+
+See [COST_OPTIMIZATION.md](COST_OPTIMIZATION.md) for detailed analysis.
+
+## Notification Type Configuration
+
+### Switching Between Notification Methods
+
+You can change the notification method without redeploying code:
+
+```bash
+# Switch to Teams only
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings NOTIFICATION_TYPE="Teams"
+
+# Switch to Email only
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings NOTIFICATION_TYPE="Email"
+
+# Use both (for testing/transition)
+az functionapp config appsettings set \
+  --name "your-function-app" \
+  --resource-group "rg-intune-notify-prod" \
+  --settings NOTIFICATION_TYPE="Both"
+```
+
+### Recommended Deployment Strategy
+
+1. **Phase 1 (Week 1):** Deploy with `NOTIFICATION_TYPE="Both"`
+2. **Phase 2 (Week 2):** Monitor both channels, verify Teams reliability
+3. **Phase 3 (Week 3):** Switch to `NOTIFICATION_TYPE="Teams"`
+4. **Phase 4 (Week 4):** Cancel SendGrid subscription (optional)

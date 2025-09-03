@@ -16,6 +16,7 @@ namespace IntuneNotificationFunction
             // Register services
             builder.Services.AddSingleton<GraphService>();
             builder.Services.AddSingleton<EmailService>();
+            builder.Services.AddSingleton<TeamsNotificationService>();
             
             // Register Application Insights
             builder.Services.AddApplicationInsightsTelemetry();
