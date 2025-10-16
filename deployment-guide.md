@@ -1,14 +1,183 @@
 # Intune Enrollment Notification System - Deployment Guide
 
-## Prerequisites
+## Deployment Options
 
-### Azure Subscription Requirements
+This guide provides two deployment approaches:
+1. **Automated PowerShell Script (Recommended)** - Single-command deployment (15 minutes)
+2. **Manual Step-by-Step** - Detailed manual deployment process (2 hours)
+
+---
+
+## Option 1: Automated PowerShell Deployment (Recommended)
+
+### Prerequisites for Automated Deployment
+
+#### Azure Subscription Requirements
 - Azure subscription with appropriate permissions
 - Resource Group creation rights
 - Azure AD Global Administrator or Application Administrator role
 - Contributor role on the target subscription
 
-### Required Tools
+#### Required Tools
+- **PowerShell 7.0+** - [Download](https://github.com/PowerShell/PowerShell/releases)
+- **Azure PowerShell (Az module 8.0+)**
+  ```powershell
+  Install-Module -Name Az -Repository PSGallery -Force
+  ```
+- **AzureAD PowerShell module**
+  ```powershell
+  Install-Module -Name AzureAD -Repository PSGallery -Force
+  ```
+- **.NET 6.0 SDK** - [Download](https://dotnet.microsoft.com/download/dotnet/6.0)
+- **Azure Functions Core Tools v4** - [Download](https://docs.microsoft.com/azure/azure-functions/functions-run-local)
+
+### Quick Start with PowerShell Script
+
+#### Step 1: Prepare Configuration File
+
+Create or edit `deployment-config.json`:
+
+```json
+{
+  "environment": "prod",
+  "location": "Canada Central",
+  "resourceGroupName": "rg-intune-notify-prod",
+  "notificationType": "Teams",
+  "teamsTeamId": "your-teams-team-id",
+  "teamsChannelId": "your-teams-channel-id",
+  "sendGridApiKey": "",
+  "notificationEmails": "admin@company.com"
+}
+```
+
+**Get Teams IDs:**
+1. Open Microsoft Teams
+2. Navigate to your team → Click "..." → "Get link to team"
+3. Extract the `groupId` from the URL (this is your Team ID)
+4. Navigate to your channel → Click "..." → "Get link to channel"
+5. Extract the channel ID from the URL
+
+See [SETUP_TEAMS.md](SETUP_TEAMS.md) for detailed instructions.
+
+#### Step 2: Run Deployment Script
+
+```powershell
+# Deploy using configuration file (recommended)
+.\Deploy-IntuneNotifier.ps1 -ConfigFile .\deployment-config.json
+
+# Or deploy with inline parameters
+.\Deploy-IntuneNotifier.ps1 `
+  -Environment prod `
+  -Location "Canada Central" `
+  -NotificationType Teams `
+  -TeamsTeamId "your-team-id" `
+  -TeamsChannelId "your-channel-id"
+```
+
+#### Step 3: Grant API Permissions
+
+After the script creates the Azure AD app registration:
+1. Navigate to Azure Portal → Azure Active Directory → App registrations
+2. Find "Intune Enrollment Notifier - {environment}"
+3. Click API permissions → Add required Microsoft Graph permissions:
+   - `DeviceManagementManagedDevices.Read.All` (Application)
+   - `DeviceManagementConfiguration.Read.All` (Application)
+   - `User.Read.All` (Application)
+   - `ChannelMessage.Send` (Application)
+   - `Team.ReadBasic.All` (Application)
+   - `Channel.ReadBasic.All` (Application)
+4. Click "Grant admin consent"
+
+#### Step 4: Configure Key Vault Secrets
+
+The script outputs the Key Vault name. Add the Graph API credentials:
+
+```powershell
+$keyVaultName = "your-keyvault-name"  # From script output
+
+# Add Graph API credentials (from app registration)
+az keyvault secret set --vault-name $keyVaultName --name "GRAPH-API-CLIENT-ID" --value "your-client-id"
+az keyvault secret set --vault-name $keyVaultName --name "GRAPH-API-TENANT-ID" --value "your-tenant-id"
+az keyvault secret set --vault-name $keyVaultName --name "GRAPH-API-CLIENT-SECRET" --value "your-client-secret"
+```
+
+#### Step 5: Verify Deployment
+
+Test the health endpoint:
+```powershell
+$functionUrl = "your-function-url"  # From script output
+Invoke-RestMethod -Uri "$functionUrl/api/health" -Method Get
+```
+
+Expected response:
+```json
+{
+  "Status": "Healthy",
+  "Services": {
+    "GraphService": "Connected",
+    "NotificationService": "Teams Connected"
+  }
+}
+```
+
+### Deployment Log
+
+All deployment activities are logged to:
+```
+%USERPROFILE%\Documents\Deploy-IntuneNotifier-YYYY-MM-DD-HH-MM.log
+```
+
+Review this log for troubleshooting or audit purposes.
+
+### Script Parameters
+
+| Parameter | Description | Default | Required |
+|-----------|-------------|---------|----------|
+| `Environment` | Target environment (dev/staging/prod) | prod | No |
+| `Location` | Azure region | Canada Central | No |
+| `ResourceGroupName` | Resource group name | rg-intune-notify-{env} | No |
+| `NotificationType` | Teams, Email, or Both | Teams | No |
+| `TeamsTeamId` | Microsoft Teams Team ID | - | If Teams |
+| `TeamsChannelId` | Microsoft Teams Channel ID | - | If Teams |
+| `SendGridApiKey` | SendGrid API key | - | If Email |
+| `NotificationEmails` | Comma-separated email list | - | If Email |
+| `ConfigFile` | Path to JSON config file | - | No |
+| `SkipAppRegistration` | Skip app registration step | false | No |
+| `SkipResourceDeployment` | Skip resource deployment | false | No |
+
+### Troubleshooting Automated Deployment
+
+**Prerequisites check fails:**
+- Ensure all required tools are installed and in PATH
+- Verify PowerShell version: `$PSVersionTable.PSVersion`
+
+**Azure connection fails:**
+- Run `Connect-AzAccount` manually
+- Verify you have appropriate permissions
+
+**Bicep deployment fails:**
+- Check resource naming conflicts
+- Verify subscription quota limits
+- Review deployment log for specific errors
+
+**Function deployment fails:**
+- Ensure .NET SDK is installed: `dotnet --version`
+- Verify Azure Functions Core Tools: `func --version`
+- Check Function App is running in Azure Portal
+
+---
+
+## Option 2: Manual Step-by-Step Deployment
+
+### Prerequisites
+
+#### Azure Subscription Requirements
+- Azure subscription with appropriate permissions
+- Resource Group creation rights
+- Azure AD Global Administrator or Application Administrator role
+- Contributor role on the target subscription
+
+#### Required Tools
 - Azure CLI (version 2.40+)
     https://learn.microsoft.com/en-us/cli/azure/install-azure-cli-windows?view=azure-cli-latest&pivots=msi
 - Azure PowerShell (version 8.0+)

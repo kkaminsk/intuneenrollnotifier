@@ -42,11 +42,15 @@ See [COST_OPTIMIZATION.md](COST_OPTIMIZATION.md) for detailed analysis.
 ### Prerequisites
 
 - Azure subscription
-- Microsoft 365 with Teams
+- Microsoft 365 with Teams (for Teams notifications)
 - Azure AD admin access
+- PowerShell 7.0+
+- Azure PowerShell module (Az)
 - .NET 6.0 SDK
 
-### Setup
+### Automated Deployment (Recommended)
+
+**Deploy in 15 minutes with a single command:**
 
 1. **Clone the repository**
    ```bash
@@ -54,24 +58,44 @@ See [COST_OPTIMIZATION.md](COST_OPTIMIZATION.md) for detailed analysis.
    cd intuneenrollnotifier
    ```
 
-2. **Configure Teams integration** (Recommended)
+2. **Get Teams IDs** (if using Teams notifications)
    
-   Follow the step-by-step guide: [SETUP_TEAMS.md](SETUP_TEAMS.md)
+   Follow the guide: [SETUP_TEAMS.md](SETUP_TEAMS.md) to get your Team ID and Channel ID
 
-3. **Deploy to Azure**
-   ```bash
-   # Build the project
-   cd src/IntuneNotificationFunction
-   dotnet build
+3. **Configure deployment**
    
-   # Publish to Azure (replace with your function app name)
-   func azure functionapp publish your-function-app-name
+   Edit `deployment-config.json`:
+   ```json
+   {
+     "environment": "prod",
+     "location": "Canada Central",
+     "notificationType": "Teams",
+     "teamsTeamId": "your-team-id",
+     "teamsChannelId": "your-channel-id"
+   }
    ```
 
-4. **Configure settings**
-   - Update Azure Function App settings
-   - Configure Key Vault secrets
-   - Set notification type (Teams/Email/Both)
+4. **Run deployment script**
+   ```powershell
+   .\Deploy-IntuneNotifier.ps1 -ConfigFile .\deployment-config.json
+   ```
+
+5. **Grant API permissions**
+   - Navigate to Azure Portal → Azure AD → App registrations
+   - Find "Intune Enrollment Notifier - prod"
+   - Grant admin consent for Microsoft Graph permissions
+
+6. **Verify deployment**
+   ```powershell
+   # Test the health endpoint (URL from script output)
+   Invoke-RestMethod -Uri "https://your-function-app.azurewebsites.net/api/health"
+   ```
+
+**That's it!** Your deployment log is saved to: `%USERPROFILE%\Documents\Deploy-IntuneNotifier-YYYY-MM-DD-HH-MM.log`
+
+### Manual Deployment
+
+For detailed manual deployment steps, see [deployment-guide.md](deployment-guide.md)
 
 ## Configuration
 
